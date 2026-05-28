@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests phonenumbers
+
+      - name: Verify import before release
+        run: python -c "import phantom_track"
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release archive
+        run: |
+          mkdir phantom-track-${{ steps.version.outputs.VERSION }}
+          cp phantom_track.py README.md LICENSE \
+             phantom-track-${{ steps.version.outputs.VERSION }}/ 2>/dev/null || \
+          cp phantom_track.py README.md \
+             phantom-track-${{ steps.version.outputs.VERSION }}/
+          zip -r phantom-track-${{ steps.version.outputs.VERSION }}.zip \
+               phantom-track-${{ steps.version.outputs.VERSION }}/
+
+      - name: Generate release notes from commits
+        id: notes
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            NOTES=$(git log "$PREV_TAG"..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          else
+            NOTES=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          fi
+          echo "NOTES<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$NOTES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Phantom Track ${{ steps.version.outputs.VERSION }}"
+          body: |
+            ## What's changed
+
+            ${{ steps.notes.outputs.NOTES }}
+
+            ## Installation
+
+            ```bash
+            pip install requests phonenumbers
+            python3 phantom_track.py
+            ```
+          files: phantom-track-${{ steps.version.outputs.VERSION }}.zip
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
